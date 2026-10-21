@@ -1,0 +1,6 @@
+# 解压出的模型超过 GitHub 单文件限制，勿提交（仓库中已提供 sub.zip）
+sub.glb
+__pycache__/
+build/
+dist/
+*.spec

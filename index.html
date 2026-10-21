@@ -65,13 +65,9 @@
     border:1px solid #c9d6e4;border-radius:8px;padding:10px 12px;font-size:12px;color:#2c5d8f;z-index:5}
   #legend .lgrow{display:flex;align-items:stretch;gap:8px}
   #legend .bar{width:16px;height:140px;border-radius:8px;
-    background:linear-gradient(to top,#00008f,#0000ff,#00bfff,#00ff9f,#7fff00,#ffff00,#ff7f00,#ff0000)}
+    background:linear-gradient(to top,#00008f,#0000ff,#00bfff,#00ff9f,#7fff00,#ffff00,#ff7f00,#ff0000,#8c1be6)}
   #legend .ticks{height:140px;display:flex;flex-direction:column;justify-content:space-between}
   #legend .note{margin-top:6px;font-size:10px;color:#8aa0b6}
-  #hud{position:absolute;left:14px;top:12px;background:rgba(255,255,255,.85);border:1px solid #c9d6e4;
-    border-radius:8px;padding:8px 12px;font-size:12px;line-height:1.8;color:#2c5d8f;z-index:5;
-    font-variant-numeric:tabular-nums}
-  #hud b{color:#1f4e79;font-size:14px}
 
   /* ---------- 右侧教学面板 ---------- */
   #right{width:250px;flex:0 0 auto;background:#fff;border-left:1px solid #d8e0ea;
@@ -124,6 +120,16 @@
       </div>
 
       <div class="card">
+        <h4>深度尺</h4>
+        <canvas id="gauge" style="width:100%;height:250px;display:block"></canvas>
+        <div style="font-size:12px;line-height:1.9;color:#41566c;font-variant-numeric:tabular-nums;margin-top:6px">
+          深度 <b id="hudDepth" style="color:#1f4e79">0</b> m<br>
+          最大压力 <b id="hudPmax" style="color:#1f4e79">0.00</b> MPa<br>
+          最小压力 <b id="hudPmin" style="color:#1f4e79">0.00</b> MPa
+        </div>
+      </div>
+
+      <div class="card">
         <h4>下潜速度</h4>
         <div class="knobwrap">
           <div class="knob" id="knobSpeed" style="width:70px;height:70px">
@@ -149,16 +155,23 @@
           <button class="btn" id="btnBottom">直达一万二</button>
         </div>
       </div>
+
+      <div class="card">
+        <h4>色标范围 (MPa)</h4>
+        <div style="display:flex;gap:8px;font-size:12px;color:#41566c;align-items:center">
+          <span>下限</span>
+          <input id="cmapMin" type="number" min="0" step="5" value="0"
+                 style="width:64px;padding:4px 6px;border:1px solid #c9d6e4;border-radius:5px">
+          <span>上限</span>
+          <input id="cmapMax" type="number" min="1" step="5" value="121"
+                 style="width:64px;padding:4px 6px;border:1px solid #c9d6e4;border-radius:5px">
+        </div>
+      </div>
     </div>
 
     <!-- ============ 中间 3D ============ -->
     <div id="center">
       <div id="view"></div>
-      <div id="hud">
-        深度 <b id="hudDepth">0</b> m<br>
-        最大压力 <b id="hudPmax">0.00</b> MPa<br>
-        最小压力 <b id="hudPmin">0.00</b> MPa
-      </div>
       <div id="loading" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
         background:rgba(255,255,255,.9);border:1px solid #c9d6e4;border-radius:8px;
         padding:14px 22px;font-size:13px;color:#2c5d8f;z-index:6">模型加载中…</div>
@@ -186,20 +199,32 @@
 /* ================= 物理常量 ================= */
 const RHO = 1025, G = 9.81;          // 海水密度, 重力加速度
 const DEPTH_MAX = 12000;             // 最大下潜深度 (m)
-const P_COLOR_MAX = RHO*G*12000;     // 色标上限：12000 m 静压 ≈120.6 MPa（到最大深度才全红）
 const VERT_EXAG = 600;               // 壳体垂向梯度显示放大倍数
 const HULL_R = 1.5, HULL_L = 10.4;   // 艇体半径/总长 (m)
 
 /* ================= 状态 ================= */
 let depth = 0, speed = 60, diving = false, paused = false;
 
-/* ================= Jet 色标 ================= */
+/* ================= 色标（Jet + 顶端紫） ================= */
+let pColorMinPa = 0;                       // 色标下限 (Pa)
+let pColorMaxPa = RHO*G*12000;             // 色标上限 (Pa)，≈121 MPa
 function jetColor(t, out){
   t = t<0?0:t>1?1:t;
-  const r = Math.min(1, Math.max(0, 1.5 - Math.abs(4*t - 3)));
-  const g = Math.min(1, Math.max(0, 1.5 - Math.abs(4*t - 2)));
-  const b = Math.min(1, Math.max(0, 1.5 - Math.abs(4*t - 1)));
+  if (t > 0.875){                          // 红 → 紫
+    const a = (t - 0.875)/0.125;
+    out[0] = 1   + (0.55-1)*a;
+    out[1] = 0.10*a;
+    out[2] = 0.90*a;
+    return;
+  }
+  const u = t/0.875;                       // 0~0.875 段按标准 Jet
+  const r = Math.min(1, Math.max(0, 1.5 - Math.abs(4*u - 3)));
+  const g = Math.min(1, Math.max(0, 1.5 - Math.abs(4*u - 2)));
+  const b = Math.min(1, Math.max(0, 1.5 - Math.abs(4*u - 1)));
   out[0]=r; out[1]=g; out[2]=b;
+}
+function cmapT(p){                          // 压力(Pa) → 色标位置 0~1
+  return (p - pColorMinPa)/(pColorMaxPa - pColorMinPa);
 }
 
 /* ================= Three.js 场景 ================= */
@@ -341,7 +366,7 @@ function updateColors(){
     for (let i=0;i<baseY.length;i++){
       const localDepth = depth + (worldTop - baseY[i]) * VERT_EXAG;
       const p = RHO * G * Math.max(0, localDepth);      // P = ρgh
-      jetColor(p / P_COLOR_MAX, tmpC);
+      jetColor(cmapT(p), tmpC);
       arr[i*3]   = tmpC[0];
       arr[i*3+1] = tmpC[1];
       arr[i*3+2] = tmpC[2];
@@ -365,6 +390,74 @@ function updateColors(){
   const mix = (a,b)=>Math.round(a+(b-a)*t);
   centerEl.style.setProperty('--bgTop', 'rgb('+mix(127,4)+','+mix(178,12)+','+mix(221,24)+')');
   centerEl.style.setProperty('--bgBot', 'rgb('+mix(74,0)+','+mix(134,3)+','+mix(200,8)+')');
+
+  drawGauge();
+}
+
+/* ================= 深度尺（Q版小潜艇随深度下移） ================= */
+const gaugeCv = document.getElementById('gauge');
+function drawGauge(){
+  const dpr = Math.min(devicePixelRatio||1, 2);
+  const W = gaugeCv.clientWidth, H = gaugeCv.clientHeight;
+  if (!W) return;
+  if (gaugeCv.width !== Math.round(W*dpr)){ gaugeCv.width = W*dpr; gaugeCv.height = H*dpr; }
+  const g = gaugeCv.getContext('2d');
+  g.setTransform(dpr,0,0,dpr,0,0);
+  g.clearRect(0,0,W,H);
+
+  const xR = 46;              // 尺线 x
+  const y0 = 14, y1 = H - 10; // 0 m ~ 12000 m 的纵坐标范围
+  const yOf = d => y0 + (y1-y0)*d/DEPTH_MAX;
+
+  /* 水体渐变柱 */
+  const grad = g.createLinearGradient(0,y0,0,y1);
+  grad.addColorStop(0,'#9cc8ee'); grad.addColorStop(0.5,'#2f6fb8'); grad.addColorStop(1,'#04060f');
+  g.fillStyle = grad;
+  g.fillRect(xR-7, y0, 14, y1-y0);
+  g.strokeStyle = '#c9d6e4'; g.strokeRect(xR-7, y0, 14, y1-y0);
+
+  /* 刻度：每 1000 m 一短刻，每 2000 m 一数字 */
+  g.strokeStyle = '#5a7288'; g.fillStyle = '#5a7288';
+  g.font = '10px sans-serif'; g.textAlign = 'left'; g.textBaseline = 'middle';
+  for (let d=0; d<=DEPTH_MAX; d+=1000){
+    const y = yOf(d);
+    g.beginPath(); g.moveTo(xR+7, y); g.lineTo(xR+12, y); g.stroke();
+    if (d % 2000 === 0) g.fillText(d >= 1000 ? (d/1000)+'k' : '0', xR+15, y);
+  }
+
+  /* Q版小潜艇（参考 Show_V15 风格：圆头艇身 + 围壳 + 尾翼 + 螺旋桨） */
+  const sy = yOf(depth);
+  const sx = xR - 26;
+  g.save(); g.translate(sx, sy);
+  const bob = Math.sin(performance.now()/700)*1.2;   // 轻微上下浮动
+  g.translate(0, bob);
+  // 尾翼
+  g.fillStyle = '#8fa3b5';
+  g.beginPath(); g.moveTo(7,-1); g.lineTo(13,-6); g.lineTo(15,-6); g.lineTo(11,0); g.closePath(); g.fill();
+  g.beginPath(); g.moveTo(7, 1); g.lineTo(13, 6); g.lineTo(15, 6); g.lineTo(11,0); g.closePath(); g.fill();
+  // 艇身（头大尾细）
+  g.beginPath();
+  g.moveTo(-16, 0);
+  g.bezierCurveTo(-15,-6, -9,-7.5, -3,-7);
+  g.lineTo(6,-5.5);
+  g.bezierCurveTo(10,-5, 13,-2.5, 14, 0);
+  g.bezierCurveTo(13, 2.5, 10, 5, 6, 5.5);
+  g.lineTo(-3, 7);
+  g.bezierCurveTo(-9, 7.5, -15, 6, -16, 0);
+  const bg2 = g.createLinearGradient(0,-7,0,7);
+  bg2.addColorStop(0,'#f6f9fc'); bg2.addColorStop(0.6,'#cfdbe6'); bg2.addColorStop(1,'#93a8bb');
+  g.fillStyle = bg2; g.fill();
+  g.strokeStyle = '#5a7288'; g.lineWidth = 0.8; g.stroke();
+  // 围壳
+  g.beginPath(); g.moveTo(-8,-6.6); g.lineTo(-6.5,-11); g.lineTo(-1,-11); g.lineTo(0,-6.2); g.closePath();
+  g.fillStyle = '#dbe4ec'; g.fill(); g.stroke();
+  // 观察窗
+  g.fillStyle = '#2b6ea8';
+  g.beginPath(); g.arc(-12.2, -0.5, 1.8, 0, 7); g.fill();
+  // 螺旋桨
+  g.strokeStyle = '#7a90a6'; g.lineWidth = 1.4;
+  g.beginPath(); g.moveTo(15.2,-3.4); g.lineTo(15.2,3.4); g.stroke();
+  g.restore();
 }
 
 /* ================= 气泡特效 =================
@@ -456,12 +549,13 @@ bindKnob(document.getElementById('knobDepth'),
   ()=>depth, v=>{ depth = Math.min(DEPTH_MAX, Math.max(0, v)); diving=false; updateColors(); });
 bindKnob(document.getElementById('knobSpeed'),
   ()=>speed, v=>{
-    speed = Math.min(200, Math.max(10, Math.round(v)));
+    speed = Math.min(500, Math.max(1, Math.round(v)));
     document.getElementById('speedNum').textContent = speed;
     document.getElementById('speedNeedle').style.transform =
-      'rotate(' + (-135 + 270*(speed-10)/190) + 'deg)';
+      'rotate(' + (-135 + 270*(speed-1)/499) + 'deg)';
   });
-document.getElementById('speedNeedle').style.transform = 'rotate(-57deg)';
+document.getElementById('speedNeedle').style.transform =
+  'rotate(' + (-135 + 270*(60-1)/499) + 'deg)';
 
 document.getElementById('depthInput').addEventListener('change', e=>{
   let v = parseFloat(e.target.value);
@@ -485,6 +579,33 @@ document.getElementById('btnSurface').addEventListener('click', ()=>{
 document.getElementById('btnBottom').addEventListener('click', ()=>{
   depth = 12000; diving = false; updateColors();
 });
+
+/* 色标上下限可调 */
+function updateLegendTicks(){
+  const lo = pColorMinPa/1e6, hi = pColorMaxPa/1e6, mid = (lo+hi)/2;
+  const ts = document.querySelectorAll('#legend .ticks span');
+  ts[0].textContent = hi.toFixed(hi>=100?0:1) + ' MPa';
+  ts[1].textContent = mid.toFixed(mid>=100?0:1);
+  ts[2].textContent = lo.toFixed(lo>=100?0:1) + ' MPa';
+}
+function bindCmap(id, isMax){
+  document.getElementById(id).addEventListener('change', e=>{
+    let v = parseFloat(e.target.value);
+    if (isNaN(v)) v = isMax ? 121 : 0;
+    if (isMax) pColorMaxPa = Math.max(1, v)*1e6;
+    else       pColorMinPa = Math.max(0, v)*1e6;
+    if (pColorMaxPa <= pColorMinPa){          // 保证上限>下限
+      if (isMax) pColorMaxPa = pColorMinPa + 1e6;
+      else       pColorMinPa = Math.max(0, pColorMaxPa - 1e6);
+    }
+    e.target.value = (isMax ? pColorMaxPa : pColorMinPa)/1e6;
+    updateLegendTicks();
+    updateColors();
+  });
+}
+bindCmap('cmapMin', false);
+bindCmap('cmapMax', true);
+updateLegendTicks();
 
 /* 教学面板已移除 */
 
@@ -510,6 +631,7 @@ function loop(now){
     updateColors();
   }
   updateBubbles(dt);
+  drawGauge();               // 小潜艇浮动动画（静止时也重绘）
   controls.update();
   renderer.render(scene, camera);
 }
